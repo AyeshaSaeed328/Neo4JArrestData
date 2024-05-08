@@ -6,7 +6,7 @@
 
 == Introduction
 
-This project aims to analyze NYPD arrest data from 2018 using Neo4j graph database and Python. By importing the dataset into Neo4j and running various Cypher queries and graph algorithms, we can gain insights into arrest trends, demographic distributions, crime hotspots, and community structures.
+This project aims to analyze NYPD arrest data from 2018 using Neo4j graph database and Python. By importing the dataset into Neo4j and running various Cypher queries and graph algorithms, we can gain insights into arrest trends, demographic distributions, crime hotspots, and community structuresand future crimes a person is likely to commit.
 
 == Scenario
 
@@ -171,4 +171,69 @@ RETURN most_common_crime, crime_count
 ORDER BY crime_count DESC
 LIMIT 5;
 ----
+
+
+
+==== Link Prediction to identify future crimes a person is likely to commit
+
+[source,cypher]
+----
+// Prediction graph
+CALL gds.graph.project('predictionGraph',
+['Person', 'Crime'],
+[{COMMITTED: {orientation: 'UNDIRECTED'}}]
+);
+
+// Configure pipeline
+CALL gds.beta.pipeline.linkPrediction.create('crimePredictionPipeline');
+
+
+
+// Add node properties including 'perp_race', 'perp_sex', and 'age_group'
+CALL gds.beta.pipeline.linkPrediction.addNodeProperty('crimePredictionPipeline',
+'node2vec', {
+mutateProperty: 'age_group',
+embeddingDimension: 64,
+randomSeed: 42
+}) YIELD nodePropertySteps;
+
+// Feature engineering
+CALL gds.beta.pipeline.linkPrediction.addFeature('crimePredictionPipeline',
+'HADAMARD', {
+nodeProperties: ['perp_race', 'perp_sex']
+}) YIELD featureSteps;
+
+
+
+// Configure split
+CALL gds.beta.pipeline.linkPrediction.configureSplit('crimePredictionPipeline', {
+testFraction: 0.1,
+trainFraction: 0.1,
+validationFolds: 3
+}) YIELD splitConfig;
+
+// Add logistic regression model
+CALL gds.beta.pipeline.linkPrediction.addLogisticRegression('crimePredictionPipeline')
+YIELD parameterSpace;
+
+
+
+// Train the model
+CALL gds.beta.pipeline.linkPrediction.train('predictionGraph', {
+pipeline: 'crimePredictionPipeline',
+modelName: 'crimePredictionModel',
+targetRelationshipType: 'COMMITTED',
+metrics: ['AUCPR'],
+randomSeed: 42
+}) YIELD modelInfo, modelSelectionStats;
+
+// Predict potential future crimes
+CALL gds.beta.pipeline.linkPrediction.predict.mutate('predictionGraph', {
+modelName: 'crimePredictionModel',
+mutateRelationshipType: 'POTENTIAL_CRIME_PREDICTION',
+topN: 40,
+threshold: 0.5
+}) YIELD relationshipsWritten, samplingStats;
+----
+
 
